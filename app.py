@@ -357,15 +357,8 @@ def limpiar_tabla():
 def importar_desde_csv(archivo_csv, usuario):
     """Importar datos desde archivo CSV - VERSIÓN MEJORADA"""
     try:
-        # Leer el archivo CSV de diferentes formas
-        try:
-            # Intentar leer con pandas
-            df = pd.read_csv(archivo_csv)
-        except:
-            # Si falla, intentar leer como string y luego con pandas
-            archivo_csv.seek(0)  # Resetear el puntero del archivo
-            content = archivo_csv.read().decode('utf-8')
-            df = pd.read_csv(io.StringIO(content))
+        # Leer el archivo CSV
+        df = pd.read_csv(archivo_csv)
         
         conn = conectar_db()
         c = conn.cursor()
@@ -375,11 +368,11 @@ def importar_desde_csv(archivo_csv, usuario):
         
         for index, fila in df.iterrows():
             try:
-                # Mapeo flexible de columnas - MÁS ROBUSTO
+                # Mapeo flexible de columnas
                 nombre = ""
                 genero = ""
                 idioma = ""
-                traduccion = "No"  # Valor por defecto
+                traduccion = "No"
                 fecha = ""
                 pais = ""
                 
@@ -401,28 +394,13 @@ def importar_desde_csv(archivo_csv, usuario):
                     elif any(keyword in col_lower for keyword in ['pais', 'country', 'origen', 'origin']):
                         pais = col_value
                 
-                # Si no encontramos traducción, intentar inferirla
-                if traduccion == "No" and idioma and idioma.lower() != 'español' and idioma.lower() != 'spanish':
-                    traduccion = "Sí"
-                
                 # Validar datos esenciales
                 if nombre and genero:
-                    # Limpiar y formatear datos
+                    # Limpiar datos
                     nombre = nombre.strip()
                     genero = genero.strip()
                     idioma = idioma.strip() if idioma else "Desconocido"
                     pais = pais.strip() if pais else "Desconocido"
-                    
-                    # Formatear fecha si es necesario
-                    if fecha:
-                        try:
-                            # Intentar convertir diferentes formatos de fecha
-                            if isinstance(fecha, str):
-                                fecha = fecha.strip()
-                            else:
-                                fecha = str(fecha)
-                        except:
-                            fecha = ""
                     
                     c.execute(
                         "INSERT INTO peliculas (nombre, genero, idioma, traduccion, fecha, pais, usuario_creacion) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -493,86 +471,114 @@ def actualizar_pelicula_masiva():
         # Verificar permisos
         if st.session_state.user_data['rol'] not in ['admin', 'editor']:
             st.error("❌ Solo administradores y editores pueden importar datos")
-        else:
-            st.info("""
-            **📝 Formato de CSV aceptado:**
-            - El archivo debe tener columnas con estos nombres (o similares):
-            - **nombre, título, pelicula** → Nombre de la película
-            - **genero, género, categoria** → Género cinematográfico  
-            - **idioma, lenguaje, language** → Idioma original
-            - **traduccion, traducción, subtitulos** → ¿Tiene traducción? (Sí/No)
-            - **fecha, date, estreno, año** → Fecha de estreno
-            - **pais, país, country, origen** → País de origen
+            return
+        
+        st.info("""
+        **📝 Formato de CSV aceptado:**
+        - El sistema detectará automáticamente las columnas con estos nombres (o similares):
+        - **nombre, título, pelicula** → Nombre de la película
+        - **genero, género, categoria** → Género cinematográfico  
+        - **idioma, lenguaje, language** → Idioma original
+        - **traduccion, traducción, subtitulos** → ¿Tiene traducción? (Sí/No)
+        - **fecha, date, estreno, año** → Fecha de estreno
+        - **pais, país, country, origen** → País de origen
+        """)
+        
+        # Inicializar estado del archivo en session_state
+        if 'archivo_csv_cargado' not in st.session_state:
+            st.session_state.archivo_csv_cargado = None
+            st.session_state.df_preview = None
+        
+        # File uploader
+        archivo_csv = st.file_uploader(
+            "Selecciona un archivo CSV", 
+            type=['csv'], 
+            key="csv_uploader"
+        )
+        
+        # Botón para cargar el archivo
+        if archivo_csv is not None:
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("📁 Cargar CSV", type="primary"):
+                    try:
+                        # Guardar el archivo en session_state
+                        st.session_state.archivo_csv_cargado = archivo_csv
+                        # Leer el CSV para vista previa
+                        st.session_state.df_preview = pd.read_csv(archivo_csv)
+                        st.success("✅ Archivo cargado correctamente")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al cargar el archivo: {str(e)}")
             
-            **💡 Consejo:** Si tu CSV tiene otros nombres de columnas, el sistema intentará mapearlos automáticamente.
-            """)
+            with col2:
+                if st.session_state.archivo_csv_cargado:
+                    st.success(f"📄 Archivo cargado: {st.session_state.archivo_csv_cargado.name}")
+        
+        # Mostrar información del archivo cargado
+        if st.session_state.archivo_csv_cargado is not None and st.session_state.df_preview is not None:
+            st.subheader("👀 Vista previa del archivo cargado")
+            st.dataframe(st.session_state.df_preview.head())
             
-            # File uploader con key único para evitar problemas
-            archivo_csv = st.file_uploader(
-                "Selecciona un archivo CSV", 
-                type=['csv'], 
-                key="csv_uploader_unique"
+            st.write("**🔍 Columnas detectadas:**")
+            st.write(list(st.session_state.df_preview.columns))
+            
+            st.write(f"**📊 Total de filas:** {len(st.session_state.df_preview)}")
+            
+            # Opciones de importación
+            st.subheader("⚙️ Opciones de Importación")
+            opciones_importacion = st.radio(
+                "Modo de importación:",
+                ["➕ Agregar nuevos registros", "🔄 Reemplazar todos los datos"],
+                key="import_mode"
             )
             
-            if archivo_csv is not None:
-                try:
-                    # Mostrar información del archivo
-                    st.success(f"✅ Archivo cargado: {archivo_csv.name}")
-                    st.write(f"📏 Tamaño: {archivo_csv.size} bytes")
+            # Botón de importación
+            if st.button("🚀 Importar a Base de Datos", type="primary", key="import_btn"):
+                with st.spinner("📤 Importando datos a la base de datos..."):
+                    # Limpiar tabla si es necesario
+                    if "Reemplazar" in opciones_importacion:
+                        if st.session_state.user_data['rol'] == 'admin':
+                            resultado_limpieza = limpiar_tabla()
+                            st.info(resultado_limpieza)
+                        else:
+                            st.error("❌ Solo los administradores pueden reemplazar todos los datos")
+                            return
                     
-                    # Mostrar vista previa del CSV
-                    df_preview = pd.read_csv(archivo_csv)
-                    st.subheader("👀 Vista previa del archivo (primeras 5 filas):")
-                    st.dataframe(df_preview.head())
+                    # Resetear el archivo para lectura
+                    st.session_state.archivo_csv_cargado.seek(0)
                     
-                    st.write("**🔍 Columnas detectadas:**")
-                    st.write(list(df_preview.columns))
-                    
-                    # Opciones de importación
-                    opciones_importacion = st.radio(
-                        "Modo de importación:",
-                        ["➕ Agregar nuevos registros", "🔄 Reemplazar todos los datos"],
-                        key="import_mode"
+                    # Ejecutar importación
+                    success, mensaje, errores = importar_desde_csv(
+                        st.session_state.archivo_csv_cargado, 
+                        st.session_state.user_data['username']
                     )
                     
-                    # Botón de importación
-                    if st.button("🚀 Ejecutar Importación", type="primary", key="import_btn"):
-                        with st.spinner("📤 Importando datos..."):
-                            # Limpiar tabla si es necesario
-                            if "Reemplazar" in opciones_importacion:
-                                if st.session_state.user_data['rol'] == 'admin':
-                                    limpiar_tabla()
-                                else:
-                                    st.error("❌ Solo los administradores pueden reemplazar todos los datos")
-                                    return
-                            
-                            # Resetear el archivo para lectura
-                            archivo_csv.seek(0)
-                            
-                            # Ejecutar importación
-                            success, mensaje, errores = importar_desde_csv(
-                                archivo_csv, 
-                                st.session_state.user_data['username']
-                            )
-                            
-                            if success:
-                                st.success(mensaje)
-                                if errores:
-                                    st.warning(f"⚠️ Se encontraron {len(errores)} errores durante la importación")
-                                    with st.expander("📋 Ver detalles de errores"):
-                                        for error in errores[:10]:  # Mostrar solo primeros 10 errores
-                                            st.error(error)
-                                        if len(errores) > 10:
-                                            st.info(f"... y {len(errores) - 10} errores más")
-                            else:
-                                st.error(mensaje)
-                            
-                            # Forzar rerun para actualizar la interfaz
-                            st.rerun()
-                            
-                except Exception as e:
-                    st.error(f"❌ Error al procesar el archivo: {str(e)}")
-                    st.info("💡 Asegúrate de que el archivo sea un CSV válido y tenga el formato correcto.")
+                    if success:
+                        st.success(mensaje)
+                        if errores:
+                            st.warning(f"⚠️ Se encontraron {len(errores)} errores durante la importación")
+                            with st.expander("📋 Ver detalles de errores"):
+                                for error in errores[:10]:
+                                    st.error(error)
+                                if len(errores) > 10:
+                                    st.info(f"... y {len(errores) - 10} errores más")
+                        
+                        # Limpiar el estado después de importar exitosamente
+                        st.session_state.archivo_csv_cargado = None
+                        st.session_state.df_preview = None
+                    else:
+                        st.error(mensaje)
+                    
+                    # Forzar rerun para actualizar la interfaz
+                    st.rerun()
+            
+            # Botón para limpiar el archivo cargado
+            if st.button("🗑️ Limpiar Archivo Cargado"):
+                st.session_state.archivo_csv_cargado = None
+                st.session_state.df_preview = None
+                st.success("✅ Archivo eliminado de la memoria")
+                st.rerun()
     
     with tab3:
         st.subheader("🔄 Actualización Rápida por Texto")
