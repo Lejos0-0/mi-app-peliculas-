@@ -1,137 +1,125 @@
 import streamlit as st
 import sqlite3
-import pandas as pd
-import plotly.express as px
 import hashlib
 import os
 from datetime import datetime
 
-# Configuración con manejo de errores
-try:
-    st.set_page_config(
-        page_title="Sistema de Gestión de Películas",
-        page_icon="🎬",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-except:
-    pass
+# Configuración
+st.set_page_config(
+    page_title="Sistema de Películas",
+    page_icon="🎬",
+    layout="wide"
+)
 
 # Constantes
-DB_FILE = "longlist.db"
-ADMIN_DB = "admin_users.db"
+DB_FILE = "peliculas.db"
 
-# -------------------- FUNCIONES MEJORADAS --------------------
-def init_databases():
-    """Inicializa todas las bases de datos con manejo de errores"""
+def init_database():
+    """Inicializar base de datos simple"""
     try:
-        # Base de datos de películas
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS peliculas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT,
-            genero TEXT,
-            idioma_original TEXT,
-            traduccion_disponible TEXT,
-            fecha_salida TEXT,
-            pais_origen TEXT
-        )
-        """)
         
-        # Verificar si hay datos
-        count = c.execute("SELECT COUNT(*) FROM peliculas").fetchone()[0]
-        if count == 0:
-            ejemplos = [
-                ("Inception", "Ciencia Ficción", "Inglés", "Sí", "2010-07-16", "USA"),
-                ("Parasite", "Thriller", "Coreano", "Sí", "2019-05-30", "Corea del Sur"),
-                ("Amélie", "Comedia", "Francés", "No", "2001-04-25", "Francia"),
-                ("Spirited Away", "Animación", "Japonés", "Sí", "2001-07-20", "Japón")
-            ]
-            c.executemany("INSERT INTO peliculas VALUES (NULL,?,?,?,?,?,?)", ejemplos)
-            conn.commit()
-        conn.close()
+        # Tabla de películas
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS peliculas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT,
+                genero TEXT,
+                idioma TEXT,
+                traduccion TEXT,
+                fecha TEXT,
+                pais TEXT
+            )
+        ''')
         
-        # Base de datos de administradores
-        conn = sqlite3.connect(ADMIN_DB)
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            nombre_completo TEXT
-        )
-        """)
+        # Tabla de usuarios
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT,
+                nombre TEXT
+            )
+        ''')
         
-        # Admin por defecto
-        count = c.execute("SELECT COUNT(*) FROM admins WHERE username='admin'").fetchone()[0]
-        if count == 0:
+        # Usuario por defecto
+        c.execute("SELECT COUNT(*) FROM usuarios WHERE username='admin'")
+        if c.fetchone()[0] == 0:
             password_hash = hashlib.sha256("admin123".encode()).hexdigest()
-            c.execute("INSERT INTO admins VALUES (NULL,?,?,?)", 
-                     ("admin", password_hash, "Administrador Principal"))
-            conn.commit()
-        conn.close()
+            c.execute("INSERT INTO usuarios (username, password, nombre) VALUES (?, ?, ?)",
+                     ("admin", password_hash, "Administrador"))
         
+        # Datos de ejemplo
+        c.execute("SELECT COUNT(*) FROM peliculas")
+        if c.fetchone()[0] == 0:
+            peliculas = [
+                ("Inception", "Ciencia Ficción", "Inglés", "Sí", "2010-07-16", "USA"),
+                ("El Laberinto del Fauno", "Fantasía", "Español", "Sí", "2006-10-11", "España"),
+                ("Parasite", "Thriller", "Coreano", "Sí", "2019-05-30", "Corea del Sur")
+            ]
+            c.executemany("INSERT INTO peliculas (nombre, genero, idioma, traduccion, fecha, pais) VALUES (?, ?, ?, ?, ?, ?)", peliculas)
+        
+        conn.commit()
+        conn.close()
         return True
     except Exception as e:
-        st.error(f"Error inicializando bases de datos: {str(e)}")
+        st.error(f"Error BD: {e}")
         return False
-
-def safe_db_operation(func):
-    """Decorator para operaciones seguras de base de datos"""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            st.error(f"Error de base de datos: {str(e)}")
-            return None
-    return wrapper
-
-@safe_db_operation
-def obtener_peliculas():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM peliculas", conn)
-    conn.close()
-    return df
-
-@safe_db_operation
-def agregar_pelicula(nombre, genero, idioma, traduccion, fecha, pais):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO peliculas VALUES (NULL,?,?,?,?,?,?)", 
-             (nombre, genero, idioma, traduccion, fecha, pais))
-    conn.commit()
-    conn.close()
-    return True, f"Película '{nombre}' agregada"
-
-@safe_db_operation
-def eliminar_pelicula(pelicula_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM peliculas WHERE id=?", (pelicula_id,))
-    conn.commit()
-    conn.close()
-    return True, "Película eliminada"
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-@safe_db_operation
 def verificar_login(username, password):
-    conn = sqlite3.connect(ADMIN_DB)
-    c = conn.cursor()
-    password_hash = hash_password(password)
-    result = c.execute("SELECT nombre_completo FROM admins WHERE username=? AND password=?", 
-                      (username, password_hash)).fetchone()
-    conn.close()
-    return result[0] if result else None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        password_hash = hash_password(password)
+        c.execute("SELECT nombre FROM usuarios WHERE username=? AND password=?", (username, password_hash))
+        result = c.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except:
+        return None
 
-# -------------------- INTERFAZ SIMPLIFICADA --------------------
-def pagina_login():
+def obtener_peliculas():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT * FROM peliculas")
+        peliculas = c.fetchall()
+        conn.close()
+        return peliculas
+    except:
+        return []
+
+def agregar_pelicula(nombre, genero, idioma, traduccion, fecha, pais):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO peliculas (nombre, genero, idioma, traduccion, fecha, pais) VALUES (?, ?, ?, ?, ?, ?)",
+                 (nombre, genero, idioma, traduccion, fecha, pais))
+        conn.commit()
+        conn.close()
+        return True, "✅ Película agregada"
+    except Exception as e:
+        return False, f"❌ Error: {e}"
+
+def eliminar_pelicula(pelicula_id):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM peliculas WHERE id=?", (pelicula_id,))
+        conn.commit()
+        conn.close()
+        return True, "✅ Película eliminada"
+    except Exception as e:
+        return False, f"❌ Error: {e}"
+
+# INTERFAZ
+def login_page():
     st.title("🎬 Sistema de Películas")
-    st.subheader("Inicio de Sesión")
+    st.subheader("Iniciar Sesión")
     
     with st.form("login"):
         user = st.text_input("Usuario")
@@ -153,9 +141,9 @@ def pagina_login():
             else:
                 st.warning("Completa ambos campos")
     
-    st.info("**Demo:** usuario: admin | contraseña: admin123")
+    st.info("**Demo:** admin / admin123")
 
-def pagina_principal():
+def main_page():
     st.title("🎬 Gestión de Películas")
     st.write(f"👤 Usuario: {st.session_state.nombre}")
     
@@ -165,87 +153,65 @@ def pagina_principal():
     
     st.markdown("---")
     
-    # Navegación simple
-    opcion = st.radio("Navegación", ["📊 Dashboard", "🎭 Películas", "➕ Agregar"], horizontal=True)
+    menu = st.radio("Navegación", ["📋 Ver Películas", "➕ Agregar", "🗑️ Eliminar"], horizontal=True)
     
-    if opcion == "📊 Dashboard":
-        mostrar_dashboard()
-    elif opcion == "🎭 Películas":
+    if menu == "📋 Ver Películas":
         mostrar_peliculas()
-    elif opcion == "➕ Agregar":
-        agregar_pelicula_form()
+    elif menu == "➕ Agregar":
+        agregar_form()
+    elif menu == "🗑️ Eliminar":
+        eliminar_form()
 
-def mostrar_dashboard():
-    st.header("📊 Dashboard")
+def mostrar_peliculas():
+    st.header("🎬 Lista de Películas")
     
-    df = obtener_peliculas()
-    if df is None or df.empty:
+    peliculas = obtener_peliculas()
+    
+    if not peliculas:
         st.info("No hay películas registradas")
         return
     
-    # Métricas
-    cols = st.columns(4)
-    with cols[0]: st.metric("Total", len(df))
-    with cols[1]: st.metric("Géneros", df['genero'].nunique())
-    with cols[2]: st.metric("Idiomas", df['idioma_original'].nunique())
-    with cols[3]: st.metric("Países", df['pais_origen'].nunique())
-    
-    # Gráficos simples
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if 'genero' in df.columns:
-            fig = px.pie(df, names='genero', title='Géneros')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        if 'traduccion_disponible' in df.columns:
-            fig = px.pie(df, names='traduccion_disponible', title='Traducciones')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Lista de películas
-    st.subheader("🎬 Lista de Películas")
-    st.dataframe(df[['nombre', 'genero', 'idioma_original', 'pais_origen']])
-
-def mostrar_peliculas():
-    st.header("🎭 Gestión de Películas")
-    
-    df = obtener_peliculas()
-    if df is None or df.empty:
-        st.info("No hay películas")
-        return
-    
-    # Búsqueda simple
-    busqueda = st.text_input("🔍 Buscar por nombre")
-    if busqueda:
-        df = df[df['nombre'].str.contains(busqueda, case=False, na=False)]
-    
-    st.dataframe(df, use_container_width=True)
-    
-    # Eliminar película
-    if not df.empty:
-        pelicula_eliminar = st.selectbox("Seleccionar para eliminar", df['nombre'].values)
-        if st.button("🗑️ Eliminar", type="primary"):
-            pelicula_id = df[df['nombre'] == pelicula_eliminar].iloc[0]['id']
-            success, msg = eliminar_pelicula(pelicula_id)
-            if success:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
-
-def agregar_pelicula_form():
-    st.header("➕ Agregar Película")
-    
-    with st.form("agregar"):
-        nombre = st.text_input("Nombre*")
-        genero = st.text_input("Género*")
-        idioma = st.text_input("Idioma*")
-        traduccion = st.selectbox("Traducción*", ["Sí", "No"])
-        fecha = st.date_input("Fecha*")
-        pais = st.text_input("País*")
+    # Mostrar en formato tabla simple
+    for pelicula in peliculas:
+        id_peli, nombre, genero, idioma, traduccion, fecha, pais = pelicula
         
-        if st.form_submit_button("✅ Agregar"):
+        with st.container():
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.subheader(nombre)
+                st.write(f"**Género:** {genero} | **Idioma:** {idioma} | **País:** {pais}")
+                st.write(f"**Traducción:** {traduccion} | **Fecha:** {fecha}")
+            with col2:
+                st.write(f"**ID:** {id_peli}")
+            st.markdown("---")
+    
+    # Estadísticas simples
+    st.subheader("📊 Estadísticas")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Películas", len(peliculas))
+    with col2:
+        generos = len(set(p[2] for p in peliculas))
+        st.metric("Géneros", generos)
+    with col3:
+        idiomas = len(set(p[3] for p in peliculas))
+        st.metric("Idiomas", idiomas)
+    with col4:
+        con_traduccion = sum(1 for p in peliculas if p[4] == "Sí")
+        st.metric("Con Traducción", con_traduccion)
+
+def agregar_form():
+    st.header("➕ Agregar Nueva Película")
+    
+    with st.form("agregar_pelicula"):
+        nombre = st.text_input("Nombre de la película")
+        genero = st.text_input("Género")
+        idioma = st.text_input("Idioma Original")
+        traduccion = st.selectbox("Traducción Disponible", ["Sí", "No"])
+        fecha = st.date_input("Fecha de Estreno")
+        pais = st.text_input("País de Origen")
+        
+        if st.form_submit_button("✅ Agregar Película"):
             if all([nombre, genero, idioma, pais]):
                 success, msg = agregar_pelicula(
                     nombre, genero, idioma, traduccion,
@@ -256,23 +222,46 @@ def agregar_pelicula_form():
                 else:
                     st.error(msg)
             else:
-                st.warning("Completa los campos obligatorios (*)")
+                st.warning("Por favor completa todos los campos")
+
+def eliminar_form():
+    st.header("🗑️ Eliminar Película")
+    
+    peliculas = obtener_peliculas()
+    
+    if not peliculas:
+        st.info("No hay películas para eliminar")
+        return
+    
+    # Crear lista de nombres para selección
+    nombres_peliculas = [f"{p[0]} - {p[1]}" for p in peliculas]
+    
+    pelicula_seleccionada = st.selectbox("Selecciona una película para eliminar:", nombres_peliculas)
+    
+    if st.button("❌ Eliminar Película", type="primary"):
+        # Extraer ID de la selección
+        pelicula_id = int(pelicula_seleccionada.split(" - ")[0])
+        success, msg = eliminar_pelicula(pelicula_id)
+        
+        if success:
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
 
 def main():
     # Inicializar estado
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     
-    # Inicializar bases de datos
-    if not init_databases():
-        st.error("Error crítico: No se pudieron inicializar las bases de datos")
-        return
-    
-    # Mostrar interfaz
-    if not st.session_state.logged_in:
-        pagina_login()
+    # Inicializar base de datos
+    if init_database():
+        if not st.session_state.logged_in:
+            login_page()
+        else:
+            main_page()
     else:
-        pagina_principal()
+        st.error("No se pudo inicializar la aplicación")
 
 if __name__ == "__main__":
     main()
