@@ -4,6 +4,7 @@ import pandas as pd
 import hashlib
 import os
 from datetime import datetime
+import io
 
 # Configuración
 st.set_page_config(
@@ -337,7 +338,7 @@ def gestion_usuarios():
                     else:
                         st.warning("⚠️ Completa ambos campos")
 
-# ==================== FUNCIONES DE ACTUALIZACIÓN MASIVA ====================
+# ==================== FUNCIONES DE ACTUALIZACIÓN MASIVA MEJORADAS ====================
 def conectar_db():
     return sqlite3.connect(DB_FILE)
 
@@ -354,39 +355,90 @@ def limpiar_tabla():
     return "🗑️ Tabla limpiada correctamente"
 
 def importar_desde_csv(archivo_csv, usuario):
-    """Importar datos desde archivo CSV"""
+    """Importar datos desde archivo CSV - VERSIÓN MEJORADA"""
     try:
-        df = pd.read_csv(archivo_csv)
+        # Leer el archivo CSV de diferentes formas
+        try:
+            # Intentar leer con pandas
+            df = pd.read_csv(archivo_csv)
+        except:
+            # Si falla, intentar leer como string y luego con pandas
+            archivo_csv.seek(0)  # Resetear el puntero del archivo
+            content = archivo_csv.read().decode('utf-8')
+            df = pd.read_csv(io.StringIO(content))
+        
         conn = conectar_db()
         c = conn.cursor()
         
         registros_procesados = 0
         errores = []
         
-        for _, fila in df.iterrows():
+        for index, fila in df.iterrows():
             try:
-                nombre = fila.get('nombre', fila.get('Nombre', fila.get('title', '')))
-                genero = fila.get('genero', fila.get('Género', fila.get('genre', '')))
-                idioma = fila.get('idioma', fila.get('Idioma', fila.get('language', '')))
-                traduccion = fila.get('traduccion', fila.get('Traducción', fila.get('translation', 'No')))
-                fecha = fila.get('fecha', fila.get('Fecha', fila.get('date', '')))
-                pais = fila.get('pais', fila.get('País', fila.get('country', '')))
+                # Mapeo flexible de columnas - MÁS ROBUSTO
+                nombre = ""
+                genero = ""
+                idioma = ""
+                traduccion = "No"  # Valor por defecto
+                fecha = ""
+                pais = ""
                 
+                # Buscar en todas las columnas posibles
+                for col_name in df.columns:
+                    col_value = str(fila[col_name]) if pd.notna(fila[col_name]) else ""
+                    col_lower = col_name.lower()
+                    
+                    if any(keyword in col_lower for keyword in ['nombre', 'name', 'title', 'pelicula', 'movie']):
+                        nombre = col_value
+                    elif any(keyword in col_lower for keyword in ['genero', 'genre', 'categoria', 'category']):
+                        genero = col_value
+                    elif any(keyword in col_lower for keyword in ['idioma', 'language', 'lenguaje']):
+                        idioma = col_value
+                    elif any(keyword in col_lower for keyword in ['traduccion', 'translation', 'subtitulos']):
+                        traduccion = "Sí" if any(keyword in col_value.lower() for keyword in ['sí', 'si', 'yes', 'true', '1']) else "No"
+                    elif any(keyword in col_lower for keyword in ['fecha', 'date', 'año', 'year', 'estreno']):
+                        fecha = col_value
+                    elif any(keyword in col_lower for keyword in ['pais', 'country', 'origen', 'origin']):
+                        pais = col_value
+                
+                # Si no encontramos traducción, intentar inferirla
+                if traduccion == "No" and idioma and idioma.lower() != 'español' and idioma.lower() != 'spanish':
+                    traduccion = "Sí"
+                
+                # Validar datos esenciales
                 if nombre and genero:
+                    # Limpiar y formatear datos
+                    nombre = nombre.strip()
+                    genero = genero.strip()
+                    idioma = idioma.strip() if idioma else "Desconocido"
+                    pais = pais.strip() if pais else "Desconocido"
+                    
+                    # Formatear fecha si es necesario
+                    if fecha:
+                        try:
+                            # Intentar convertir diferentes formatos de fecha
+                            if isinstance(fecha, str):
+                                fecha = fecha.strip()
+                            else:
+                                fecha = str(fecha)
+                        except:
+                            fecha = ""
+                    
                     c.execute(
                         "INSERT INTO peliculas (nombre, genero, idioma, traduccion, fecha, pais, usuario_creacion) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (nombre, genero, idioma, traduccion, fecha, pais, usuario)
                     )
                     registros_procesados += 1
                 else:
-                    errores.append(f"Fila {_+1}: Datos insuficientes")
+                    errores.append(f"Fila {index+1}: Datos insuficientes (nombre: '{nombre}', género: '{genero}')")
                     
             except Exception as e:
-                errores.append(f"Fila {_+1}: {str(e)}")
+                errores.append(f"Fila {index+1}: Error - {str(e)}")
         
         conn.commit()
         conn.close()
-        return True, f"✅ {registros_procesados} registros importados", errores
+        
+        return True, f"✅ {registros_procesados} registros importados correctamente", errores
         
     except Exception as e:
         return False, f"❌ Error en importación: {str(e)}", []
@@ -400,7 +452,7 @@ def exportar_a_csv():
         if df.empty:
             return None, "No hay datos para exportar"
         
-        csv_data = df.to_csv(index=False)
+        csv_data = df.to_csv(index=False, encoding='utf-8')
         return csv_data, f"✅ {len(df)} registros listos para exportar"
         
     except Exception as e:
@@ -421,7 +473,7 @@ def actualizar_pelicula_masiva():
                 st.download_button(
                     label="⬇️ Descargar CSV Completo",
                     data=csv_data,
-                    file_name=f"peliculas_export_{datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"peliculas_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv"
                 )
                 st.success(mensaje)
@@ -433,54 +485,118 @@ def actualizar_pelicula_masiva():
             st.subheader("📋 Vista Previa de Datos")
             df_preview = pd.DataFrame(peliculas, columns=['ID', 'Nombre', 'Género', 'Idioma', 'Traducción', 'Fecha', 'País', 'Fecha_Creacion', 'Usuario'])
             st.dataframe(df_preview.head(10))
-            st.write(f"Total de películas: {len(peliculas)}")
+            st.write(f"Total de películas en base de datos: {len(peliculas)}")
     
     with tab2:
-        st.subheader("Importar Datos desde CSV")
+        st.subheader("📥 Importar Datos desde CSV")
         
         # Verificar permisos
         if st.session_state.user_data['rol'] not in ['admin', 'editor']:
             st.error("❌ Solo administradores y editores pueden importar datos")
         else:
-            st.info("**📝 Formato esperado del CSV**")
+            st.info("""
+            **📝 Formato de CSV aceptado:**
+            - El archivo debe tener columnas con estos nombres (o similares):
+            - **nombre, título, pelicula** → Nombre de la película
+            - **genero, género, categoria** → Género cinematográfico  
+            - **idioma, lenguaje, language** → Idioma original
+            - **traduccion, traducción, subtitulos** → ¿Tiene traducción? (Sí/No)
+            - **fecha, date, estreno, año** → Fecha de estreno
+            - **pais, país, country, origen** → País de origen
             
-            archivo_csv = st.file_uploader("Subir archivo CSV", type=['csv'])
-            opciones_importacion = st.radio("Modo de importación:", ["➕ Agregar nuevos registros", "🔄 Reemplazar todos los datos"])
+            **💡 Consejo:** Si tu CSV tiene otros nombres de columnas, el sistema intentará mapearlos automáticamente.
+            """)
+            
+            # File uploader con key único para evitar problemas
+            archivo_csv = st.file_uploader(
+                "Selecciona un archivo CSV", 
+                type=['csv'], 
+                key="csv_uploader_unique"
+            )
             
             if archivo_csv is not None:
-                df_preview = pd.read_csv(archivo_csv)
-                st.subheader("👀 Vista previa del archivo:")
-                st.dataframe(df_preview.head())
-                
-                if st.button("🚀 Ejecutar Importación", type="primary"):
-                    with st.spinner("Importando datos..."):
-                        if "Reemplazar" in opciones_importacion:
-                            resultado = limpiar_tabla()
-                            if "❌" in resultado:
-                                st.error(resultado)
-                                return
-                        
-                        success, mensaje, errores = importar_desde_csv(archivo_csv, st.session_state.user_data['username'])
-                        
-                        if success:
-                            st.success(mensaje)
-                            if errores:
-                                st.warning(f"⚠️ {len(errores)} errores encontrados")
-                        else:
-                            st.error(mensaje)
+                try:
+                    # Mostrar información del archivo
+                    st.success(f"✅ Archivo cargado: {archivo_csv.name}")
+                    st.write(f"📏 Tamaño: {archivo_csv.size} bytes")
                     
-                    st.rerun()
+                    # Mostrar vista previa del CSV
+                    df_preview = pd.read_csv(archivo_csv)
+                    st.subheader("👀 Vista previa del archivo (primeras 5 filas):")
+                    st.dataframe(df_preview.head())
+                    
+                    st.write("**🔍 Columnas detectadas:**")
+                    st.write(list(df_preview.columns))
+                    
+                    # Opciones de importación
+                    opciones_importacion = st.radio(
+                        "Modo de importación:",
+                        ["➕ Agregar nuevos registros", "🔄 Reemplazar todos los datos"],
+                        key="import_mode"
+                    )
+                    
+                    # Botón de importación
+                    if st.button("🚀 Ejecutar Importación", type="primary", key="import_btn"):
+                        with st.spinner("📤 Importando datos..."):
+                            # Limpiar tabla si es necesario
+                            if "Reemplazar" in opciones_importacion:
+                                if st.session_state.user_data['rol'] == 'admin':
+                                    limpiar_tabla()
+                                else:
+                                    st.error("❌ Solo los administradores pueden reemplazar todos los datos")
+                                    return
+                            
+                            # Resetear el archivo para lectura
+                            archivo_csv.seek(0)
+                            
+                            # Ejecutar importación
+                            success, mensaje, errores = importar_desde_csv(
+                                archivo_csv, 
+                                st.session_state.user_data['username']
+                            )
+                            
+                            if success:
+                                st.success(mensaje)
+                                if errores:
+                                    st.warning(f"⚠️ Se encontraron {len(errores)} errores durante la importación")
+                                    with st.expander("📋 Ver detalles de errores"):
+                                        for error in errores[:10]:  # Mostrar solo primeros 10 errores
+                                            st.error(error)
+                                        if len(errores) > 10:
+                                            st.info(f"... y {len(errores) - 10} errores más")
+                            else:
+                                st.error(mensaje)
+                            
+                            # Forzar rerun para actualizar la interfaz
+                            st.rerun()
+                            
+                except Exception as e:
+                    st.error(f"❌ Error al procesar el archivo: {str(e)}")
+                    st.info("💡 Asegúrate de que el archivo sea un CSV válido y tenga el formato correcto.")
     
     with tab3:
-        st.subheader("Actualización Rápida por Texto")
+        st.subheader("🔄 Actualización Rápida por Texto")
         
         if st.session_state.user_data['rol'] not in ['admin', 'editor']:
             st.error("❌ Solo administradores y editores pueden agregar películas")
         else:
-            st.write("**📝 Formato por línea:** `nombre;género;idioma;traducción;fecha;país`")
+            st.write("""
+            **📝 Formato por línea:** 
+            `nombre;género;idioma;traducción;fecha;país`
+            
+            **Ejemplo:**
+            ```
+            El Padrino;Drama;Inglés;Sí;1972-03-24;USA
+            Toy Story;Animación;Inglés;Sí;1995-11-22;USA
+            ```
+            """)
             
             with st.form("agregar_rapido"):
-                datos_texto = st.text_area("Ingresa los datos (una película por línea):", height=200)
+                datos_texto = st.text_area(
+                    "Ingresa los datos (una película por línea):", 
+                    height=200,
+                    placeholder="Ejemplo:\nEl Padrino;Drama;Inglés;Sí;1972-03-24;USA\nToy Story;Animación;Inglés;Sí;1995-11-22;USA"
+                )
                 
                 if st.form_submit_button("➕ Agregar Películas"):
                     if datos_texto:
@@ -505,7 +621,7 @@ def actualizar_pelicula_masiva():
                                     else:
                                         errores.append(f"Línea {i+1}: Nombre y género requeridos")
                                 else:
-                                    errores.append(f"Línea {i+1}: Formato incorrecto")
+                                    errores.append(f"Línea {i+1}: Formato incorrecto (se esperaban 6 campos separados por ';')")
                                     
                             except Exception as e:
                                 errores.append(f"Línea {i+1}: {str(e)}")
@@ -513,9 +629,13 @@ def actualizar_pelicula_masiva():
                         conn.commit()
                         conn.close()
                         
-                        st.success(f"✅ {agregadas} películas agregadas")
+                        st.success(f"✅ {agregadas} películas agregadas correctamente")
                         if errores:
-                            st.warning(f"❌ {len(errores)} errores")
+                            st.warning(f"❌ {len(errores)} líneas con errores:")
+                            for error in errores[:5]:
+                                st.write(f"• {error}")
+                    else:
+                        st.warning("⚠️ Ingresa al menos una película")
     
     with tab4:
         st.subheader("🗑️ Herramientas de Limpieza")
